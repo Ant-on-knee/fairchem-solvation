@@ -39,6 +39,7 @@ from fairchem.core.models.uma.nn.embedding import (
     ChgSpinEmbedding,
     DatasetEmbedding,
     EdgeDegreeEmbedding,
+    SolventEmbedding,
 )
 from fairchem.core.models.uma.nn.execution_backends import (
     get_execution_backend,
@@ -307,6 +308,9 @@ class eSCNMDBackbone(nn.Module, MOLEInterface):
             dict[str, str] | None
         ) = None,  # mapping from config dataset name to dataset embedding name e.g. {"omol": "omol", "oc20": "oc20", "oc20_subset": "oc20"}, this allows multiple subsets to use the same dataset embedding.
         use_dataset_embedding: bool = True,
+        use_solvent_embedding: bool = False,
+        solvent_emb_grad: bool = True,
+        solvent_emb_hidden: int = 128,
         use_cuda_graph_wigner: bool = False,
         use_quaternion_wigner: bool = True,
         radius_pbc_version: int = 2,
@@ -380,6 +384,10 @@ class eSCNMDBackbone(nn.Module, MOLEInterface):
             self.dataset_mapping = resolve_dataset_mapping(
                 self.dataset_list, dataset_mapping, "dataset_list"
             )
+        # Solvent embedding settings
+        self.use_solvent_embedding = use_solvent_embedding
+        self.solvent_emb_grad = solvent_emb_grad
+        self.solvent_emb_hidden = solvent_emb_hidden
         # rotation utils
         Jd_list = torch.load(os.path.join(os.path.dirname(__file__), "Jd.pt"))
         for l in range(self.lmax + 1):
@@ -421,6 +429,10 @@ class eSCNMDBackbone(nn.Module, MOLEInterface):
             grad=self.cs_emb_grad,
         )
 
+        # mix charge + spin, plus the dataset and solvent embeddings when
+        # enabled
+        csd_factors = 2
+
         # dataset embedding
         if self.use_dataset_embedding:
             self.dataset_embedding = DatasetEmbedding(
@@ -428,11 +440,23 @@ class eSCNMDBackbone(nn.Module, MOLEInterface):
                 enable_grad=self.dataset_emb_grad,
                 dataset_mapping=self.dataset_mapping,
             )
-            # mix charge, spin, dataset embeddings
-            self.mix_csd = nn.Linear(3 * self.sphere_channels, self.sphere_channels)
-        else:
-            # mix charge, spin
-            self.mix_csd = nn.Linear(2 * self.sphere_channels, self.sphere_channels)
+            csd_factors += 1
+
+        # solvent embedding
+        if self.use_solvent_embedding:
+            from fairchem.core.datasets.solvent import SOLVENT_DIM
+
+            self.solvent_embedding = SolventEmbedding(
+                solvent_input_dim=SOLVENT_DIM,
+                embedding_size=self.sphere_channels,
+                hidden_size=self.solvent_emb_hidden,
+                grad=self.solvent_emb_grad,
+            )
+            csd_factors += 1
+
+        self.mix_csd = nn.Linear(
+            csd_factors * self.sphere_channels, self.sphere_channels
+        )
 
         # edge distance embedding
         self.cutoff = cutoff
@@ -575,18 +599,21 @@ class eSCNMDBackbone(nn.Module, MOLEInterface):
         # wigner_inv is made contiguous by .transpose().contiguous() above
         return wigner, wigner_inv
 
-    def csd_embedding(self, charge, spin, dataset):
+    def csd_embedding(self, charge, spin, dataset, solvent=None):
         with record_function("charge spin dataset embeddings"):
-            # Add charge, spin, and dataset embeddings
-            chg_emb = self.charge_embedding(charge)
-            spin_emb = self.spin_embedding(spin)
+            # Mix charge, spin, and (optionally) dataset + solvent embeddings.
+            # Solvent is concatenated last so enabling it never shifts the
+            # weight columns of the existing terms.
+            embs = [self.charge_embedding(charge), self.spin_embedding(spin)]
             if self.use_dataset_embedding:
                 assert dataset is not None
-                dataset_emb = self.dataset_embedding(dataset)
-                return torch.nn.SiLU()(
-                    self.mix_csd(torch.cat((chg_emb, spin_emb, dataset_emb), dim=1))
-                )
-            return torch.nn.SiLU()(self.mix_csd(torch.cat((chg_emb, spin_emb), dim=1)))
+                embs.append(self.dataset_embedding(dataset))
+            if self.use_solvent_embedding:
+                assert (
+                    solvent is not None
+                ), "use_solvent_embedding=True but the input has no 'solvent' field"
+                embs.append(self.solvent_embedding(solvent))
+            return torch.nn.SiLU()(self.mix_csd(torch.cat(embs, dim=1)))
 
     def _generate_graph(self, data_dict):
         data_dict["gp_node_offset"] = 0
@@ -687,6 +714,7 @@ class eSCNMDBackbone(nn.Module, MOLEInterface):
             charge=data_dict["charge"],
             spin=data_dict["spin"],
             dataset=data_dict.get("dataset", default=None),
+            solvent=data_dict.get("solvent", default=None),
         )
 
         self.set_MOLE_coefficients(

@@ -93,6 +93,7 @@ class eSCNMDMoeBackbone(eSCNMDBackbone, MOLEInterface):
             charge=data["charge"],
             spin=data["spin"],
             dataset=data["dataset"],
+            solvent=data.get("solvent", None),
         )
         self.set_MOLE_coefficients(
             atomic_numbers_full=data["atomic_numbers"],

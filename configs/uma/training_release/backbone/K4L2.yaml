@@ -33,3 +33,11 @@ ff_type: spectral
 chg_spin_emb_type: "rand_emb"
 cs_emb_grad: True
 dataset_list: ${dataset_list}
+
+# Solvent conditioning. Enabling this requires training from scratch:
+# it resizes mix_csd, so existing UMA checkpoints will not load. Datasets
+# should set `solvent` in a2g_args.r_data_keys (with a per-structure
+# atoms.info["solvent"]); structures without one get the vacuum vector.
+use_solvent_embedding: True
+solvent_emb_grad: True
+solvent_emb_hidden: 16

@@ -252,3 +252,56 @@ class DatasetEmbedding(nn.Module):
             ]
 
         return torch.stack(emb_for_datasets, dim=0)
+
+
+class SolventEmbedding(nn.Module):
+    """
+    MLP embedding of the solvent conditioning vector.
+
+    Maps the per-system solvent vector (seven normalized solvent descriptors
+    plus a solvent-present mask) to a per-system embedding that is mixed with
+    the charge/spin/dataset embeddings in the backbone. The vacuum/gas-phase
+    case is encoded in the input vector itself (zeroed descriptors + mask
+    channel), so the forward pass has no data-dependent control flow and is
+    torch.compile friendly.
+
+    Args:
+        solvent_input_dim: Width of the solvent conditioning vector
+            (SOLVENT_DIM).
+        embedding_size: Output embedding width (sphere_channels).
+        hidden_size: Width of the MLP hidden layer.
+        grad: If False, freeze all parameters.
+    """
+
+    def __init__(
+        self,
+        solvent_input_dim: int,
+        embedding_size: int,
+        hidden_size: int = 128,
+        grad: bool = True,
+    ) -> None:
+        super().__init__()
+        self.solvent_input_dim = solvent_input_dim
+        self.embedding_size = embedding_size
+        self.net = nn.Sequential(
+            nn.Linear(solvent_input_dim, hidden_size),
+            nn.SiLU(),
+            nn.Linear(hidden_size, embedding_size),
+        )
+        # Small init on the final layer so the solvent contribution starts near
+        # zero and does not destabilize early training.
+        nn.init.uniform_(self.net[-1].weight, -0.001, 0.001)
+        nn.init.zeros_(self.net[-1].bias)
+        if not grad:
+            for param in self.net.parameters():
+                param.requires_grad = False
+
+    def forward(self, solvent: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            solvent: A (num_graph, solvent_input_dim) float tensor.
+
+        Returns:
+            A (num_graph, embedding_size) embedding tensor.
+        """
+        return self.net(solvent.to(self.net[0].weight.dtype))

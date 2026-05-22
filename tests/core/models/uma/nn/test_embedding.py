@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import torch
 
-from fairchem.core.models.uma.nn.embedding import DatasetEmbedding
+from fairchem.core.models.uma.nn.embedding import (
+    DatasetEmbedding,
+    SolventEmbedding,
+)
 
 
 class TestDatasetEmbedding:
@@ -114,3 +117,34 @@ class TestDatasetEmbedding:
         assert not torch.allclose(
             oc20_embedding, omat_embedding
         ), "'oc20' should not equal 'omat' embedding"
+
+
+class TestSolventEmbedding:
+    """Test the SolventEmbedding class."""
+
+    def test_forward_shape(self):
+        emb = SolventEmbedding(solvent_input_dim=8, embedding_size=64)
+        out = emb(torch.randn(4, 8))
+        assert out.shape == (4, 64)
+
+    def test_trainable_when_grad_true(self):
+        emb = SolventEmbedding(solvent_input_dim=8, embedding_size=32, grad=True)
+        assert all(p.requires_grad for p in emb.parameters())
+
+    def test_not_trainable_when_grad_false(self):
+        emb = SolventEmbedding(solvent_input_dim=8, embedding_size=32, grad=False)
+        assert all(not p.requires_grad for p in emb.parameters())
+
+    def test_vacuum_and_solvent_give_distinct_finite_outputs(self):
+        torch.manual_seed(0)
+        emb = SolventEmbedding(solvent_input_dim=8, embedding_size=16)
+        out_vacuum = emb(torch.zeros(1, 8))
+        out_solvent = emb(torch.randn(1, 8))
+        assert torch.isfinite(out_vacuum).all()
+        assert torch.isfinite(out_solvent).all()
+        assert not torch.allclose(out_vacuum, out_solvent)
+
+    def test_compile_runs(self):
+        emb = SolventEmbedding(solvent_input_dim=8, embedding_size=16)
+        out = torch.compile(emb)(torch.randn(3, 8))
+        assert out.shape == (3, 16)

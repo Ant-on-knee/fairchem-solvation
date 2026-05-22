@@ -130,3 +130,57 @@ def test_get_pbc_distances_preserves_dtype(dtype):
     assert out["distances"].dtype == dtype
     assert out["distance_vec"].dtype == dtype
     assert out["offsets"].dtype == dtype
+
+
+def test_from_ase_solvent_lookup_by_solvent_name():
+    from fairchem.core.datasets.solvent import SOLVENT_DIM, get_solvent_vector
+
+    atoms = molecule("H2O")
+    atoms.info["solvent"] = "water"
+    data = AtomicData.from_ase(atoms, r_data_keys=["charge", "spin", "solvent"])
+    assert hasattr(data, "solvent")
+    assert data.solvent.shape == (1, SOLVENT_DIM)
+    assert torch.allclose(data.solvent, get_solvent_vector("water"))
+
+
+def test_from_ase_solvent_absent_without_r_data_key():
+    atoms = molecule("H2O")
+    atoms.info["solvent"] = "water"
+    data = AtomicData.from_ase(atoms)
+    assert not hasattr(data, "solvent")
+
+
+def test_solvent_batching_and_unbatching():
+    from fairchem.core.datasets.solvent import SOLVENT_DIM
+
+    atoms_w = molecule("H2O")
+    atoms_w.info["solvent"] = "water"
+    atoms_a = molecule("CH4")
+    atoms_a.info["solvent"] = "acetone"
+
+    d_w = AtomicData.from_ase(atoms_w, r_data_keys=["solvent"])
+    d_a = AtomicData.from_ase(atoms_a, r_data_keys=["solvent"])
+
+    batch = atomicdata_list_to_batch([d_w, d_a])
+    assert batch.solvent.shape == (2, SOLVENT_DIM)
+    assert torch.allclose(batch.solvent[0:1], d_w.solvent)
+    assert torch.allclose(batch.solvent[1:2], d_a.solvent)
+    # the two solvents must produce distinct vectors
+    assert not torch.allclose(batch.solvent[0], batch.solvent[1])
+
+    examples = batch.batch_to_atomicdata_list()
+    assert torch.allclose(examples[0].solvent, d_w.solvent)
+    assert torch.allclose(examples[1].solvent, d_a.solvent)
+
+
+def test_solvent_to_ase_single_roundtrip():
+    atoms = molecule("H2O")
+    atoms.info["solvent"] = "water"
+    data = AtomicData.from_ase(atoms, r_data_keys=["solvent"])
+
+    ase_atoms = data.to_ase_single()
+    assert "solvation-data" in ase_atoms.info
+
+    # re-ingesting the precomputed vector reproduces the original tensor
+    data2 = AtomicData.from_ase(ase_atoms, r_data_keys=["solvent"])
+    assert torch.allclose(data2.solvent, data.solvent)

@@ -64,7 +64,7 @@ _REQUIRED_KEYS = [
     "tags",
 ]
 
-_OPTIONAL_KEYS = ["energy", "forces", "stress", "dataset"]
+_OPTIONAL_KEYS = ["energy", "forces", "stress", "dataset", "solvent"]
 
 # TODO: potential future keys
 # ["virials", "atom_attr", "edge_attr"]
@@ -177,6 +177,7 @@ class AtomicData:
         batch: torch.Tensor | None = None,  # (num_node,)
         sid: list[str] | None = None,
         dataset: list[str] | str | None = None,
+        solvent: torch.Tensor | None = None,  # (num_graph, SOLVENT_DIM)
     ):
         self.__keys__ = set(_REQUIRED_KEYS)
 
@@ -206,6 +207,10 @@ class AtomicData:
                 raise ValueError(
                     f"dataset must be a string or list of strings, got {type(dataset)}"
                 )
+
+        # Solvent conditioning vector (optional, per-graph)
+        if solvent is not None:
+            self.solvent = solvent
 
         # tagets
         if energy is not None:
@@ -283,6 +288,12 @@ class AtomicData:
         if "dataset" in self.__keys__:
             assert isinstance(self.dataset, list), "dataset must always be a list"
             assert len(self.dataset) == self.num_graphs
+
+        if "solvent" in self.__keys__:
+            assert (
+                self.solvent.dim() == 2
+            ), "solvent must be a (num_graph, SOLVENT_DIM) tensor"
+            assert self.solvent.shape[0] == self.num_graphs
 
         # dtype checks
         assert (
@@ -479,6 +490,21 @@ class AtomicData:
             ]
         )
 
+        if r_data_keys is not None and "solvent" in r_data_keys:
+            from fairchem.core.datasets.solvent import (
+                SOLVENT_DIM,
+                get_solvent_vector,
+            )
+
+            if "solvation-data" in atoms.info:
+                solvent = torch.as_tensor(
+                    atoms.info["solvation-data"], dtype=torch.float32
+                ).view(1, SOLVENT_DIM)
+            else:
+                solvent = get_solvent_vector(atoms.info.get("solvent"), strict=False)
+        else:
+            solvent = None
+
         # NOTE: code assumes these are ints.. not tensors
         # charge = atoms.info.get("charge", 0)
         # spin = atoms.info.get("spin", 0)
@@ -500,6 +526,7 @@ class AtomicData:
             stress=stress,
             sid=[sid] if isinstance(sid, str) else sid,
             dataset=task_name,
+            solvent=solvent,
         )
 
         return data
@@ -539,6 +566,9 @@ class AtomicData:
         if self.sid is not None:
             atoms.info["sid"] = self.sid
 
+        if hasattr(self, "solvent"):
+            atoms.info["solvation-data"] = self.solvent.squeeze(0).cpu().numpy()
+
         return atoms
 
     def to_ase(self) -> list[ase.Atoms]:
@@ -570,6 +600,7 @@ class AtomicData:
             batch=dictionary.get("batch", None),
             sid=dictionary.get("sid", None),
             dataset=dictionary.get("dataset", None),
+            solvent=dictionary.get("solvent", None),
         )
 
         # TODO: may require validation for them in the future

@@ -136,6 +136,59 @@ def test_escnmd_backbone_symmetries(
     ), f"For this molecule {atoms.positions=}, node embeddings should be invariant under this symmetry transformation {symmetry_matrix=}."  # high tolerance due to low precision
 
 
+def test_escnmd_backbone_solvent_disabled_is_unchanged():
+    """With use_solvent_embedding=False (default) the backbone is structurally
+    identical to before: no solvent module, mix_csd unchanged."""
+    backbone = eSCNMDBackbone(
+        max_num_elements=100,
+        sphere_channels=4,
+        lmax=2,
+        mmax=2,
+        otf_graph=True,
+        edge_channels=5,
+        num_distance_basis=7,
+        use_dataset_embedding=False,
+        always_use_pbc=False,
+    )
+    assert not hasattr(backbone, "solvent_embedding")
+    assert backbone.mix_csd.in_features == 2 * backbone.sphere_channels
+
+
+def test_escnmd_backbone_with_solvent_embedding():
+    """A backbone with use_solvent_embedding=True runs a forward pass and
+    widens mix_csd to include the solvent term."""
+    torch.manual_seed(42)
+    backbone = eSCNMDBackbone(
+        max_num_elements=100,
+        sphere_channels=4,
+        lmax=2,
+        mmax=2,
+        otf_graph=True,
+        edge_channels=5,
+        num_distance_basis=7,
+        use_dataset_embedding=False,
+        use_solvent_embedding=True,
+        solvent_emb_hidden=8,
+        always_use_pbc=False,
+    )
+    assert hasattr(backbone, "solvent_embedding")
+    assert backbone.mix_csd.in_features == 3 * backbone.sphere_channels
+
+    atoms = get_molecule("H2O")
+    atoms.info["solvent"] = "water"
+    g = AtomicData.from_ase(
+        input_atoms=atoms,
+        max_neigh=25,
+        radius=12,
+        task_name="solvent_test",
+        r_edges=False,
+        r_data_keys=["spin", "charge", "solvent"],
+    )
+    out = backbone(g)
+    assert out["node_embedding"].shape[0] == len(atoms)
+    assert torch.isfinite(out["node_embedding"]).all()
+
+
 def test_resolve_dataset_mapping_valid_mapping():
     mapping = {"oc20": "oc20", "oc20_subset": "oc20"}
     result = resolve_dataset_mapping(deprecated_list=None, dataset_mapping=mapping)

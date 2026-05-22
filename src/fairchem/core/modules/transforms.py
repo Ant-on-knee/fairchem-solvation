@@ -48,6 +48,13 @@ def common_transform(data_object: AtomicData, config) -> AtomicData:
         data_object.charge = 0
     if not hasattr(data_object, "spin"):
         data_object.spin = 0
+    if not hasattr(data_object, "solvent"):
+        # Inject the vacuum/gas-phase solvent vector so a model with
+        # use_solvent_embedding=True can train on datasets without solvent
+        # labels.
+        from fairchem.core.datasets.solvent import get_solvent_vector
+
+        data_object.solvent = get_solvent_vector(None)
     ensure_tensor(data_object, "energy")
     return data_object
 
