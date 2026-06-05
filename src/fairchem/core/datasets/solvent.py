@@ -70,6 +70,21 @@ def _load_raw() -> dict:
         return json.load(f)
 
 
+@functools.lru_cache(maxsize=1)
+def _solvents_lower() -> dict:
+    """
+    Solvent table keyed by lowercased name for case-insensitive lookup.
+
+    JSON keys may carry uppercase (e.g. ``"dimethyl sulfoxide (DMSO)"``), while
+    lookup names are lowercased, so they would otherwise miss and fall back to
+    the vacuum vector.
+
+    Returns:
+        Mapping from lowercased solvent name to its descriptor dict.
+    """
+    return {k.lower(): v for k, v in _load_raw()["solvents"].items()}
+
+
 def list_solvents() -> list[str]:
     """
     Return the sorted list of solvent names with solvent descriptors.
@@ -129,7 +144,7 @@ def get_solvent_vector(solvent_name: str | None, strict: bool = True) -> torch.T
     if key in _VACUUM_NAMES:
         return vec
 
-    solvents = _load_raw()["solvents"]
+    solvents = _solvents_lower()
     if key not in solvents:
         if strict:
             raise KeyError(
