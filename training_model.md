@@ -7,7 +7,7 @@ The user is on the `esen-custom-params` branch of FAIRChem, which adds optional 
 - `configs/uma/training_release/backbone/K4L2.yaml` — `use_solvent_embedding: True`, `solvent_emb_grad: True`, `solvent_emb_hidden: 16`
 - `configs/uma/training_release/dataset/{uma,uma_finetune,uma_debug}.yaml` — `'solvent'` added to `r_data_keys`
 
-The user now wants to take **raw quantum-chemistry outputs (ORCA / xTB) for a subset of omol-like molecules** and train a UMA-small model **from scratch** on **SLURM**. Because solvent conditioning resizes `mix_csd`, existing UMA checkpoints can't be loaded — it must be from scratch.
+The user now wants to take **raw quantum-chemistry outputs (ORCA / xTB) for a subset of omol-like molecules** and train a UMA-small model on **SLURM**. Solvent conditioning widens `mix_csd`; this can be trained from scratch, or grafted onto a pretrained UMA checkpoint when finetuning (the pretrained `mix_csd` weight is zero-padded into the new solvent block at load time — see `configs/uma/finetune/uma_sm_solvent_finetune.yaml`). The walkthrough below covers the from-scratch path.
 
 The end-to-end pipeline has five stages: **parse → ASE DB → normalize/element-refs → configs → SLURM submit**.
 
@@ -23,13 +23,13 @@ from ase.calculators.singlepoint import SinglePointCalculator
 
 atoms_list = []
 for orca_out in glob.glob("orca_runs/*/*.out"):
-    atoms = read(orca_out)                     # geometry
-    energy = parse_orca_energy(orca_out)       # user helper
-    forces = parse_orca_forces(orca_out)       # user helper
+    atoms = read(orca_out)  # geometry
+    energy = parse_orca_energy(orca_out)  # user helper
+    forces = parse_orca_forces(orca_out)  # user helper
     atoms.calc = SinglePointCalculator(atoms, energy=energy, forces=forces)
-    atoms.info["charge"]  = 0
-    atoms.info["spin"]    = 0
-    atoms.info["solvent"] = "water"            # or list_solvents() name; "" / None = vacuum
+    atoms.info["charge"] = 0
+    atoms.info["spin"] = 0
+    atoms.info["solvent"] = "water"  # or list_solvents() name; "" / None = vacuum
     atoms_list.append(atoms)
 ```
 

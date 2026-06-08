@@ -1,0 +1,108 @@
+# Molecular (non-periodic) energy + forces finetuning data, with solvent
+# conditioning. Mirrors the omol blocks in
+# configs/uma/training_release/dataset/uma_finetune.yaml: a molecule cell, no
+# stress, and r_data_keys that include 'solvent' so AtomicData.from_ase reads
+# atoms.info["solvent"] (structures without one get the vacuum vector).
+#
+# Fill in the `??` fields:
+#   dataset_name    - a short tag for this dataset (also feeds the dataset embedding)
+#   elem_refs       - path to the per-element energy reference file (Step 2 output)
+#   normalizer_rmsd - force/energy RMSD from the normalizer script (Step 2 output)
+#   train/val src   - paths to your ASE DB train/val dirs
+dataset_name: ??
+elem_refs: ??
+normalizer_rmsd: ??
+
+train_dataset:
+  splits:
+    train:
+      src: ??
+  format: ase_db
+  a2g_args:
+    molecule_cell_size: 120.0
+    r_energy: True
+    r_forces: True
+    r_data_keys: ['spin', 'charge', 'solvent']
+    r_edges: False                 # otf_graph builds the graph on device
+    max_neigh: ${max_neighbors}
+  transforms:
+    common_transform:
+      dataset_name: ${data.dataset_name}
+
+val_dataset:
+  splits:
+    val:
+      src: ??
+  format: ase_db
+  a2g_args:
+    molecule_cell_size: 120.0
+    r_energy: True
+    r_forces: True
+    r_data_keys: ['spin', 'charge', 'solvent']
+    r_edges: False
+    max_neigh: ${max_neighbors}
+  transforms:
+    common_transform:
+      dataset_name: ${data.dataset_name}
+
+# molecular data: no periodic stress
+regress_stress: False
+pass_through_head_outputs: True
+
+heads:
+  efs:
+    module: fairchem.core.models.uma.escn_md.MLP_EFS_Head
+
+tasks_list:
+- _target_: fairchem.core.units.mlip_unit.mlip_unit.Task
+  name: energy
+  level: system
+  property: energy
+  loss_fn:
+    _target_: fairchem.core.modules.loss.DDPMTLoss
+    loss_fn:
+      _target_: fairchem.core.modules.loss.PerAtomMAELoss
+    coefficient: 20
+  out_spec:
+    dim: [1]
+    dtype: float32
+  normalizer:
+    _target_: fairchem.core.modules.normalization.normalizer.Normalizer
+    mean: 0.0
+    rmsd: ${data.normalizer_rmsd}
+  element_references:
+    _target_: fairchem.core.modules.normalization.element_references.ElementReferences
+    element_references:
+      _target_: torch.DoubleTensor
+      _args_:
+        - ${data.elem_refs}
+  datasets:
+    - ${data.dataset_name}
+  metrics:
+    - mae
+    - per_atom_mae
+- _target_: fairchem.core.units.mlip_unit.mlip_unit.Task
+  name: forces
+  level: atom
+  property: forces
+  train_on_free_atoms: True
+  eval_on_free_atoms: True
+  loss_fn:
+    _target_: fairchem.core.modules.loss.DDPMTLoss
+    loss_fn:
+      _target_: fairchem.core.modules.loss.L2NormLoss
+    reduction: mean
+    coefficient: 2
+  out_spec:
+    dim: [3]
+    dtype: float32
+  normalizer:
+    _target_: fairchem.core.modules.normalization.normalizer.Normalizer
+    mean: 0.0
+    rmsd: ${data.normalizer_rmsd}
+  datasets:
+    - ${data.dataset_name}
+  metrics:
+    - mae
+    - cosine_similarity
+    - magnitude_error

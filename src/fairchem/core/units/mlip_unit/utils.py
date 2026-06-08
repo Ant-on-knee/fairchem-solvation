@@ -19,6 +19,8 @@ from fairchem.core.common.registry import registry
 from fairchem.core.common.utils import load_state_dict, match_state_dict
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from fairchem.core.units.mlip_unit.api.inference import MLIPInferenceCheckpoint
     from fairchem.core.units.mlip_unit.mlip_unit import Task
 
@@ -34,6 +36,45 @@ def get_backbone_class_from_checkpoint(
         raise ValueError("Cannot determine backbone class from checkpoint config")
 
     return registry.get_model_class(backbone_model_name)
+
+
+def expand_mix_csd_state_dict(
+    model: torch.nn.Module,
+    state_dict: Mapping[str, torch.Tensor],
+) -> dict[str, torch.Tensor]:
+    """
+    Zero-pad a pretrained ``mix_csd.weight`` to the model's solvent-enabled shape.
+
+    When finetuning a pretrained checkpoint with ``use_solvent_embedding=True``, the
+    backbone's ``mix_csd`` linear layer gains a trailing ``sphere_channels``-wide input
+    block (the solvent embedding is concatenated last). The pretrained weight is copied
+    into the leading columns and the new block is zero-initialized, so the solvent term
+    contributes nothing at step 0 (an identity warm-start). The prefix-copy is valid
+    because new embedding blocks (dataset, solvent) are only ever appended, so the
+    pretrained blocks are always a prefix of the wider ordering.
+
+    This is a no-op when shapes already match (no solvent embedding, or an
+    already-finetuned checkpoint whose ``mix_csd`` is already wide).
+
+    Args:
+        model: The freshly instantiated model the weights will be loaded into.
+        state_dict: The checkpoint state dict.
+
+    Returns:
+        A new state dict with any narrower ``mix_csd.weight`` zero-padded to match.
+    """
+    model_sd = model.state_dict()
+    new_sd = dict(state_dict)
+    for key, ckpt_w in state_dict.items():
+        if not key.endswith("mix_csd.weight"):
+            continue
+        model_w = model_sd.get(key)
+        if model_w is None or model_w.shape == ckpt_w.shape:
+            continue
+        padded = model_w.new_zeros(model_w.shape)
+        padded[:, : ckpt_w.shape[1]] = ckpt_w
+        new_sd[key] = padded
+    return new_sd
 
 
 def load_inference_model(
@@ -70,7 +111,10 @@ def load_inference_model(
 
         load_state_dict(model, matched_dict, strict=strict)
     else:
-        load_state_dict(model, checkpoint.model_state_dict, strict=strict)
+        # zero-pad a narrower (pre-solvent) mix_csd when grafting the solvent
+        # embedding onto a pretrained checkpoint; no-op when shapes already match
+        state_dict = expand_mix_csd_state_dict(model, checkpoint.model_state_dict)
+        load_state_dict(model, state_dict, strict=strict)
 
     return (model, checkpoint) if return_checkpoint is True else model
 
