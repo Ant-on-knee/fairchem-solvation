@@ -33,3 +33,7 @@ ff_type: spectral
 chg_spin_emb_type: "rand_emb"
 cs_emb_grad: True
 dataset_list: ${dataset_list}
+
+use_solvent_embedding: True
+solvent_emb_grad: True
+solvent_emb_hidden: 16

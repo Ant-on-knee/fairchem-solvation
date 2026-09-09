@@ -295,6 +295,8 @@ def _report_incompat_keys(
     # filter out the missing scale factor keys for the new scaling factor module
     missing_keys: list[str] = []
     for full_key_name in keys.missing_keys:
+        if ".solvent_embedding." in f".{full_key_name}":
+            continue
         parent_module_name, _ = full_key_name.rsplit(".", 1)
         scale_factor = _resolve_scale_factor_submodule(model, parent_module_name)
         if scale_factor is not None:

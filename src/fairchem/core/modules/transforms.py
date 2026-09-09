@@ -48,6 +48,10 @@ def common_transform(data_object: AtomicData, config) -> AtomicData:
         data_object.charge = 0
     if not hasattr(data_object, "spin"):
         data_object.spin = 0
+    if not hasattr(data_object, "solvent"):
+        from fairchem.core.datasets.solvent import get_solvent_vector
+
+        data_object.solvent = get_solvent_vector(None)
     ensure_tensor(data_object, "energy")
     return data_object
 
